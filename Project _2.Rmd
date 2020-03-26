@@ -1,0 +1,228 @@
+---
+title: "Project_2"
+author: "Philip Rundall, Sam Borghese, Sean Thompson"
+date: "11/21/2019"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r 1}
+#setwd("/Users/philiprundall/Desktop/Files/School/Econ 430/Time Series")
+
+# Load Libraries
+library(lattice)
+library(foreign)
+library(MASS)
+library(car)
+require(stats)
+require(stats4)
+library(KernSmooth)
+library(fastICA)
+library(cluster)
+library(leaps)
+library(mgcv)
+library(rpart)
+library(pan)
+library(mgcv)
+library(DAAG)
+library("TTR")
+library(tis)
+require("datasets")
+require(graphics)
+library("forecast")
+require(astsa)
+library(xtable)
+library(stats)
+library(car)
+library(MTS)
+library(stats)
+library(TSA)
+library(timeSeries)
+library(fBasics)
+library(tseries)
+library(timsac)
+library(TTR)
+library(strucchange)
+library(vars)
+library(MLmetrics)
+
+#Load Data
+original.data = read.csv("UNRATE.csv")
+
+#Create new dataframes with just our two variables
+US_data <- original.data[,2]
+
+#Create time series data
+
+US_ts <- ts(data = US_data, start = 1960, frequency = 12)
+
+# 1)
+
+tsdisplay(US_ts)
+
+#The ACF for unemployment shows a long time to decay so I will add a degree of differencing into our model. 
+
+t <- seq(1960, 2018, length.out = length(US_ts))
+t2 <- t^2
+# 2) 
+
+US_arima <- auto.arima(US_ts)
+plot(US_ts, ylab = "US Unemployment Rate")
+lines(US_arima$fitted, col = "red3")
+
+#The auto arima function does a pretty good job of fitting to our unemployment data
+
+# 3) 
+
+#Adding trend for US unemployment
+
+US_trend <- lm(US_ts ~ t)
+US_trend2 <- lm(US_ts ~ t + I(t^2))
+
+S(US_trend)
+S(US_trend2)
+
+#Quadratic trend fits best so this will be our trend. 
+
+tsdisplay(US_trend2$residuals, lag.max = 20)
+
+#The pacf of the residuals of our trend model shows that our seasonal component is an AR(3) model
+
+#Building trend and AR(3) seasonal model, first without differencing:
+m2 = arima(US_ts,xreg = cbind(t, t2),seasonal=list(order=c(3,0,0)))
+tsdisplay(m2$residuals)
+
+
+#The pacf from the residuals show that our cyclical model is an AR(2) model
+#We will add 1 degree of differencing to our cyclical model 
+#Building Final Model
+m4 = arima(US_ts,order = c(2,1,0),xreg = cbind(t, t2),seasonal=list(order=c(3,0,0)))
+
+#Plotting final model in green vs actual data
+plot(US_ts, ylab = "US Unemployment Rate")
+lines(fitted(m4),col="green")
+tsdisplay(m4$residuals)
+Box.test(m4$residuals, type = "Ljung-Box", lag = 1)
+
+#Our model fits pretty well and accounts for trend, seasonal and cyclical components
+#Our seasonal components were not that strong so fitting just a trend and cyclical model may have been adequate
+#There is no more form left in our residuals
+#After Performing the Ljung Box test on the model, we get a very large p-value, 0.52, so we fail to reject that the leftover residuals are white noise
+
+# 4) 
+
+plot(fitted(m4), m4$residuals)
+
+#Most of our residuals are around 0, except for one outlier. The unemployment was close to 14, and we estimated -8. 
+
+# 5)
+
+acf(m4$residuals, main = "Residuals ACF")
+pacf(m4$residuals, main = "Residuals PACF")
+
+#All of our spikes are within the barlet bands for both the ACF and PACF so it looks like we have accounted for everything in the model
+
+# 6)
+
+#Plotting CUSUM
+#Stability function does not work with ARIMA models so this was a work around
+
+plot(efp(US_ts ~ fitted(m4), data = US_ts, type = "Score-CUSUM"))
+
+#Our CUSUM plot shows that there is only one peak outside of our interval to check for homoskedasticity within our model 
+
+# 7) 
+
+plot(m4$residuals, main = "Recursive Residuals of Unemployment Model")
+
+#Our residuals are close to 0 for most of the model except for the first observation. 
+
+# 8)
+
+S(m4)
+S(US_arima)
+
+# This model has the lowest AIC of all of our models. The magnitude dropped by about 1000 after starting with our trend model
+# It also has a lower AIC than our auto arima model
+
+# 9) 
+
+#To forecast, we will remove trend from the model becasue economically speaking, there is not really a trend in employment. It just follows seasons and cycles
+
+m5 = Arima(US_ts,order = c(2,1,0),seasonal=list(order=c(3,0,0)))
+forecast(m5,14)
+plot(forecast(m5, 14), main = "Forecast of Unemployment")
+
+# Use a recursive backtesting scheme, and forecast 12-steps ahead at each iteration. Compute the mean absolute percentage error at each step. Provide a plot showing the MAPE over each iteration.
+unRate <- US_data
+len = length(unRate)/2
+unRate_train = ts(data=unRate[1:len], start = 1960, frequency = 12)
+unRate_build = unRate_train
+m4 = arima(unRate_train,order = c(2,1,0), seasonal=list(order=c(3,0,0)))
+copy = unRate[1:len]
+mapes = c()
+preds = c()
+for(i in 1:20){
+  pred = predict(m4, n.ahead=12)
+  pred= unlist(pred[1], use.names=FALSE)
+  preds = c(preds,pred)
+  m = MAPE(preds,unRate[(len+1):(len+length(preds))])
+  mapes = c(mapes,m)
+  copy = c(copy,pred)
+  unRate_build = ts(data=copy, start = 1960, frequency = 12)
+}
+tp <- seq(1998, 2018, length.out = 20)
+plot(tp,mapes, type = "l", xlab = "Forecasted Date", ylab = "MAPE for 12 step recursive scheme")
+cat("The average MAPE for a 12 point ahead recursive backtest scheme is", mean(mapes), "\n")
+
+#14b.) Shorten your forecast horizon to only 1-step ahead. Compute the absolute percentage error at each iteration, and plot.
+
+unRate_build = unRate_train
+copy = unRate[1:len]
+mapes = c()
+preds = c()
+for(i in 1:350){
+  pred = predict(m4, n.ahead=1)
+  pred= unlist(pred[1], use.names=FALSE)
+  preds = c(preds,pred)
+  m = MAPE(preds,unRate[(len+1):(len+length(preds))])
+  mapes = c(mapes,m)
+  copy = c(copy,pred)
+  unRate_build = ts(data=copy, start = 1960, frequency = 12)
+}
+tp <- seq(1998, 2018, length.out = 350)
+plot(tp,mapes, type = "l", xlab = "Forecasted Date", ylab = "MAPE for 1 step recursive scheme")
+cat("The average MAPE for a 1 point ahead recursive backtest scheme is", mean(mapes), "\n")
+
+# 14c) Based on your findings above, does your model perform better at longer or shorter horizon forecasts?
+
+#Our model performs better on a 12 step ahead forecast
+
+# 14d) Now test your model using a moving window backtesting scheme. Forecast out 12-steps ahead at each iteration, and plot the forecast errors observed at each iteration. Repeat for a 1-step ahead forecast horizon. Provide plots of both.
+
+
+#tsCV functions needs a forecast object to run
+#Creating forecast object
+far2 <- function(x, h){forecast(Arima(US_ts,order = c(2,1,0),seasonal=list(order=c(3,0,0))), h = h)}
+
+#12 steps ahead
+USCV12 <- tsCV(US_ts, far2, h=12)
+plot(US_ts)
+plot(USCV12[,12], main = "12 Step Ahead Unemployment Forecast")
+USCV12[,12]
+
+#1 step ahead
+USCV1 <- tsCV(US_ts, far2, h=1)
+plot(USCV1, main = "1 Step Ahead Unemployment Forecast")
+USCV1
+
+# 14e) How do the errors found using a recursive backtesting scheme compare with the errors observed using a moving average backtesting scheme? Which scheme showed higher errors overall, and what does that tell you about your model?
+
+#Our errors are lower for the moving window backtesting scheme because  we are only training the model with half of our 
+#data in part a and b. In part d we are retraining the model with a larger portion of data at each iteration.
+```
+
